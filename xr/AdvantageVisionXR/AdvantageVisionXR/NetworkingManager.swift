@@ -66,8 +66,8 @@ class NetworkingManager: ObservableObject {
     /// Timer to detect connection timeouts
     private var receiveTimer: Timer?
     
-    /// MessagePack decoder for binary messages
-    private let messageDecoder = MessagePackDecoder()
+    /// MessagePack helper for binary message decoding
+    private let messagePackHelper = MessagePackHelper()
     
     // MARK: - Published Properties
     
@@ -307,7 +307,7 @@ class NetworkingManager: ObservableObject {
     private func handleBinaryMessage(_ data: Data) async {
         do {
             // Try to decode the MessagePack data to determine the message type
-            guard let packet = try messageDecoder.decodePacket(from: data) else {
+            guard let packet = try messagePackHelper.decodePacket(from: data) else {
                 print("Unknown packet format")
                 return
             }
@@ -335,7 +335,7 @@ class NetworkingManager: ObservableObject {
             
             // Try JSON fallback if MessagePack fails
             do {
-                if let packet = try messageDecoder.attemptJSONFallback(from: data) {
+                if let packet = try messagePackHelper.attemptJSONFallback(from: data) {
                     print("JSON fallback successful")
                     
                     // Process based on packet type

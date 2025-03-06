@@ -24,30 +24,21 @@ enum MessagePackError: Error {
     case decodingError(String)
 }
 
-class MessagePackDecoder {
-    // Create a reusable decoder instance
-    private let decoder = MessagePackDecoder()
-    
+class MessagePackHelper {
     /// Decode binary MessagePack data into the appropriate packet type
     /// - Parameter data: The raw MessagePack data from the WebSocket
     /// - Returns: The decoded packet as an XRPacket object
     func decodePacket(from data: Data) throws -> XRPacket? {
         do {
-            // First extract the type field to determine which packet type to use
-            // We need to read the message as a dictionary to check the "type" field
-            let messageObject = try MessagePackReader.readObject(from: data)
-            
-            // Extract the type field
-            guard let messageDict = messageObject as? [String: Any],
-                  let typeString = messageDict["type"] as? String,
-                  let type = XRPacketType(rawValue: typeString) else {
-                throw MessagePackError.missingType
+            // First, we need to extract the type field
+            let typeName = try extractTypeField(from: data)
+            guard let type = XRPacketType(rawValue: typeName) else {
+                throw MessagePackError.unsupportedType
             }
             
-            // Create a decoder configured for MessagePack
+            // Now we know the type, use MessagePack.Decoder to decode to the correct type
             let decoder = MessagePackDecoder()
             
-            // Decode the data to the appropriate packet type based on the "type" field
             switch type {
             case .settings:
                 return try decoder.decode(XRSettingsPacket.self, from: data)
@@ -61,8 +52,44 @@ class MessagePackDecoder {
             throw error
         } catch {
             // Wrap other MessagePack errors in our custom error type
-            throw MessagePackError.decodingError(error.localizedDescription)
+            throw MessagePackError.decodingError("MessagePack decode error: \(error.localizedDescription)")
         }
+    }
+    
+    /// Extract the "type" field from the MessagePack data
+    /// - Parameter data: The raw MessagePack data
+    /// - Returns: The type string
+    private func extractTypeField(from data: Data) throws -> String {
+        // Use a simple TypeContainer to just extract the type field
+        struct TypeContainer: Decodable {
+            let type: String
+        }
+        
+        do {
+            let decoder = MessagePackDecoder()
+            let container = try decoder.decode(TypeContainer.self, from: data)
+            return container.type
+        } catch {
+            // If proper decoding fails, try a more manual approach as fallback
+            return try extractTypeManually(from: data)
+        }
+    }
+    
+    /// Fallback method to manually extract the type field
+    /// - Parameter data: The raw MessagePack data
+    /// - Returns: The type string
+    private func extractTypeManually(from data: Data) throws -> String {
+        // Try to decode as a dictionary and extract the type field
+        let decoder = MessagePackDecoder()
+        
+        // This approach decodes to a dictionary that we can extract the type from
+        if let dict = try? decoder.decode([String: AnyCodable].self, from: data),
+           let typeValue = dict["type"],
+           let typeString = typeValue.value as? String {
+            return typeString
+        }
+        
+        throw MessagePackError.missingType
     }
     
     /// Legacy fallback for testing if MessagePack decoding fails
@@ -95,20 +122,13 @@ class MessagePackDecoder {
     }
 }
 
-/// MessagePack reading utilities
-class MessagePackReader {
-    /// Read a MessagePack object from binary data
-    /// - Parameter data: The MessagePack binary data
-    /// - Returns: A Swift object representing the unpacked MessagePack data
-    static func readObject(from data: Data) throws -> Any {
-        let decoder = MessagePackDecoder()
-        return try decoder.decode(AnyDecodable.self, from: data).value
+/// Helper struct for decoding arbitrary values
+struct AnyCodable: Codable {
+    let value: Any
+    
+    init(_ value: Any) {
+        self.value = value
     }
-}
-
-/// Helper for decoding MessagePack to Any type
-struct AnyDecodable: Decodable {
-    var value: Any
     
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -125,14 +145,45 @@ struct AnyDecodable: Decodable {
             self.value = double
         } else if let string = try? container.decode(String.self) {
             self.value = string
-        } else if let array = try? container.decode([AnyDecodable].self) {
+        } else if let array = try? container.decode([AnyCodable].self) {
             self.value = array.map { $0.value }
-        } else if let dict = try? container.decode([String: AnyDecodable].self) {
+        } else if let dict = try? container.decode([String: AnyCodable].self) {
             self.value = dict.mapValues { $0.value }
         } else {
             throw DecodingError.dataCorruptedError(
                 in: container,
-                debugDescription: "MessagePack value cannot be decoded"
+                debugDescription: "Cannot decode value"
+            )
+        }
+    }
+    
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        
+        switch value {
+        case is NSNull:
+            try container.encodeNil()
+        case let bool as Bool:
+            try container.encode(bool)
+        case let int as Int:
+            try container.encode(int)
+        case let uint as UInt:
+            try container.encode(uint)
+        case let double as Double:
+            try container.encode(double)
+        case let string as String:
+            try container.encode(string)
+        case let array as [Any]:
+            try container.encode(array.map { AnyCodable($0) })
+        case let dict as [String: Any]:
+            try container.encode(dict.mapValues { AnyCodable($0) })
+        default:
+            throw EncodingError.invalidValue(
+                value,
+                EncodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "Value cannot be encoded"
+                )
             )
         }
     }
