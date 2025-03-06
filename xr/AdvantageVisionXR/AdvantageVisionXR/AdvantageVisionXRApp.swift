@@ -20,32 +20,56 @@ import RealityKit
 ///
 /// ## How it works:
 /// 1. The app connects to AdvantageScope over a WebSocket connection
-/// 2. It receives 3D model data (GLTF/GLB format) from AdvantageScope
-/// 3. It renders these models in an immersive 3D environment
-/// 4. Users can interact with and manipulate the 3D views
+/// 2. It receives MessagePack-encoded data from AdvantageScope with 3D scene information
+/// 3. It processes different message types (settings, commands, assets)
+/// 4. It renders these 3D scenes in an immersive environment
+/// 5. Users can interact with and manipulate the 3D visualizations
 
 // The @main attribute tells Swift this is the entry point for the application
 @main
 struct AdvantageVisionXRApp: App {
     // MARK: - State Properties
     
-    // @StateObject creates and owns an observable object that persists for the app's lifetime
-    @StateObject private var appModel = AppModel()
+    // @StateObject creates and owns observable objects that persist for the app's lifetime
+    @StateObject private var appModel: AppModel
+    @StateObject private var appCoordinator: AppCoordinator
     
     // @State properties are value types that trigger UI updates when changed
     @State private var networkingManager: NetworkingManager?
-    @State private var modelLoader = ModelLoader()
+    @State private var modelLoader: ModelLoader
     
     // Combine cancellables collection stores active subscriptions to prevent memory leaks
     @State private var cancellables = Set<AnyCancellable>()
     
+    // MARK: - Initialization
+    
+    /// Initialize app components
+    init() {
+        // Create app model and model loader
+        let model = AppModel()
+        let loader = ModelLoader()
+        
+        // Initialize state objects
+        _appModel = StateObject(wrappedValue: model)
+        _modelLoader = State(initialValue: loader)
+        
+        // Create app coordinator with dependencies
+        _appCoordinator = StateObject(wrappedValue: AppCoordinator(
+            appModel: model,
+            modelLoader: loader
+        ))
+    }
+    
     // MARK: - Notification Names
     
-    /// Notification sent when binary model data is received from AdvantageScope
+    /// Notification sent when binary model data is received from AdvantageScope (legacy)
     static let modelDataReceivedNotification = Notification.Name("ModelDataReceived")
     
-    /// Notification sent when a RealityKit Entity is ready to be displayed
+    /// Notification sent when a RealityKit Entity is ready to be displayed (legacy)
     static let modelEntityReadyNotification = Notification.Name("ModelEntityReady")
+    
+    /// Notification sent when the scene has been updated with new entities
+    static let sceneUpdatedNotification = Notification.Name("SceneUpdated")
     
     // MARK: - App Scene Builder
     
@@ -55,8 +79,9 @@ struct AdvantageVisionXRApp: App {
         // Create the standard 2D window interface
         WindowGroup {
             ContentView()
-                // Make appModel available to all child views through the environment
+                // Make models available to all child views through the environment
                 .environmentObject(appModel)
+                .environmentObject(appCoordinator)
                 // Task modifier runs an async task when the view appears
                 .task {
                     await setupNetworking()
@@ -67,11 +92,12 @@ struct AdvantageVisionXRApp: App {
         ImmersiveSpace(id: appModel.immersiveSpaceID) {
             ImmersiveView()
                 .environmentObject(appModel)
+                .environmentObject(appCoordinator)
                 // These lifecycle events track the immersive space state
                 .onAppear {
                     // Update app state when immersive view appears
                     appModel.immersiveSpaceState = .open
-                    setupModelObserver()
+                    setupLegacyModelObserver()
                 }
                 .onDisappear {
                     // Update app state when immersive view disappears
@@ -91,11 +117,15 @@ struct AdvantageVisionXRApp: App {
         // Create networking manager if needed
         if networkingManager == nil {
             networkingManager = NetworkingManager(appModel: appModel)
+            
+            // Setup shared instance for model downloads
+            NetworkingManager.setupShared(with: appModel)
         }
     }
     
-    /// Set up observers for model data notifications
-    private func setupModelObserver() {
+    /// Set up observers for legacy model data notifications
+    /// This provides backward compatibility with the old approach
+    private func setupLegacyModelObserver() {
         // Create a Combine publisher from NotificationCenter
         // This listens for the modelDataReceivedNotification
         NotificationCenter.default.publisher(for: AdvantageVisionXRApp.modelDataReceivedNotification)
@@ -103,17 +133,17 @@ struct AdvantageVisionXRApp: App {
             .compactMap { $0.object as? Data }
             // For each data packet received, process it
             .sink { modelData in
-                processModelData(modelData)
+                processLegacyModelData(modelData)
             }
             // Store the subscription to prevent memory leaks
             .store(in: &cancellables)
     }
     
-    // MARK: - Data Processing Pipeline
+    // MARK: - Legacy Data Processing Pipeline
     
-    /// Process binary model data received from AdvantageScope
-    /// This is part of the data pipeline: WebSocket → Binary Data → RealityKit Entity
-    private func processModelData(_ data: Data) {
+    /// Process binary model data received from AdvantageScope (legacy approach)
+    /// This is part of the old data pipeline: WebSocket → Binary Data → RealityKit Entity
+    private func processLegacyModelData(_ data: Data) {
         // The ModelLoader processes binary data and creates a RealityKit entity
         modelLoader.processModelPacket(data)
             // Ensure UI updates happen on the main thread

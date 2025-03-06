@@ -17,29 +17,33 @@ import Combine
 ///
 /// ## What this view does:
 /// - Creates and manages the 3D environment with lighting and ground reference
-/// - Displays 3D models received from AdvantageScope
+/// - Displays 3D scenes received from AdvantageScope
+/// - Manages multiple entities (robots, fields, game pieces, etc.)
 /// - Provides UI controls for manipulating the view (scale, position, etc.)
-/// - Shows information about the connection and model
+/// - Shows information about the connection and current scene
 ///
 /// ## How models are displayed:
-/// Models are received as RealityKit Entity objects via NotificationCenter,
+/// Scene entities are received via NotificationCenter from the AppCoordinator,
 /// then added to the root entity in the 3D scene.
 struct ImmersiveView: View {
     // MARK: - Properties
     
-    /// Access to the shared app model 
+    /// Access to the shared app model
     @EnvironmentObject private var appModel: AppModel
     
-    /// The currently loaded model entity
-    @State private var modelEntity: Entity?
+    /// Optional access to the app coordinator
+    @EnvironmentObject private var appCoordinator: AppCoordinator
     
     /// Root entity that contains all scene elements
     @State private var rootEntity: Entity?
     
-    /// Controls whether to show the model info panel
+    /// Collection of current scene entities
+    @State private var currentEntities: [Entity] = []
+    
+    /// Controls whether to show the info panel
     @State private var showModelInfo = false
     
-    /// Tracks the current scale of the model
+    /// Tracks the current scale of the scene
     @State private var currentScale: Float = 1.0
     
     /// Collection to store active Combine subscriptions
@@ -80,7 +84,7 @@ struct ImmersiveView: View {
                 directionalLight.look(at: [0, 0, 0], from: [5, 5, 5], relativeTo: nil)
                 
                 // Add ambient lighting using PointLight
-                // This ensures the model is visible from all angles
+                // This ensures all models are visible from all angles
                 let ambientLight = PointLight()
                 ambientLight.light.color = .white
                 ambientLight.light.intensity = 500
@@ -96,14 +100,27 @@ struct ImmersiveView: View {
             } update: { content in
                 // UPDATE PHASE: This runs whenever the view needs to update
                 
-                // If we have a model entity that hasn't been added to the scene yet, add it
-                if let modelData = modelEntity, modelEntity?.parent == nil {
-                    rootEntity?.addChild(modelData)
+                // If the AppCoordinator has updated entities, use those
+                if !appCoordinator.currentEntities.isEmpty {
+                    updateScene(appCoordinator.currentEntities)
+                }
+                
+                // Legacy approach (backward compatibility)
+                // If we have a single model entity that needs to be added
+                if let legacyModel = legacyModelEntity, legacyModel.parent == nil {
+                    // Remove any existing single model
+                    if let existingModel = rootEntity?.children.first(where: { $0.name == "legacyModel" }) {
+                        existingModel.removeFromParent()
+                    }
+                    
+                    // Add the new model
+                    legacyModel.name = "legacyModel"
+                    rootEntity?.addChild(legacyModel)
                 }
             }
-            // Add gesture support for pinch-to-zoom
+            // Add gesture support for pinch-to-zoom (scales the entire scene)
             .gesture(
-                // MagnifyGesture (pinch) allows the user to scale the model
+                // MagnifyGesture (pinch) allows the user to scale the scene
                 MagnifyGesture()
                     // During the gesture, update scale in real time
                     .onChanged { value in
@@ -123,10 +140,10 @@ struct ImmersiveView: View {
                     }
             )
             
-            // Overlay panel showing connection and model information
+            // Overlay panel showing connection and scene information
             if showModelInfo {
                 VStack {
-                    Text("Model Info")
+                    Text("Scene Info")
                         .font(.title)
                         .padding()
                     
@@ -135,7 +152,11 @@ struct ImmersiveView: View {
                     
                     if appModel.connectionState == .connected {
                         Text("Connected to: \(appModel.serverAddress)")
-                            .padding()
+                            .padding(.horizontal)
+                        
+                        // Show information about current entities
+                        Text("Scene contains \(currentEntities.count) entities")
+                            .padding(.top, 4)
                     }
                     
                     Button(action: {
@@ -165,44 +186,54 @@ struct ImmersiveView: View {
                     Label("Info", systemImage: "info.circle")
                 }
                 
-                // Reset button returns the model to its original position and scale
-                Button(action: resetModelPosition) {
+                // Reset button returns the scene to its original position and scale
+                Button(action: resetScene) {
                     Label("Reset", systemImage: "arrow.counterclockwise")
                 }
                 
                 Spacer()
                 
-                // Scale controls for adjusting model size
-                Button(action: { scaleModel(factor: 0.5) }) {
+                // Scale controls for adjusting scene size
+                Button(action: { scaleScene(factor: 0.5) }) {
                     Label("Scale Down", systemImage: "minus.circle")
                 }
                 
-                Button(action: { scaleModel(factor: 2.0) }) {
+                Button(action: { scaleScene(factor: 2.0) }) {
                     Label("Scale Up", systemImage: "plus.circle")
                 }
             }
         }
-        // Set up notification observer when the view appears
+        // Set up notification observers when the view appears
         .onAppear {
-            // Subscribe to notifications about new model entities
-            NotificationCenter.default.publisher(for: AdvantageVisionXRApp.modelEntityReadyNotification)
-                // Extract and convert the notification payload to an Entity
-                .compactMap { $0.object as? Entity }
-                // Ensure UI updates happen on the main thread
+            // Subscribe to scene update notifications (new approach)
+            NotificationCenter.default.publisher(for: AdvantageVisionXRApp.sceneUpdatedNotification)
+                .compactMap { $0.object as? [Entity] }
                 .receive(on: RunLoop.main)
-                // Process each entity as it arrives
-                .sink { entity in
-                    updateModel(entity)
+                .sink { entities in
+                    updateScene(entities)
                 }
-                // Store the subscription to prevent memory leaks
+                .store(in: &cancellables)
+            
+            // Legacy support: Subscribe to notifications about new model entities (old approach)
+            NotificationCenter.default.publisher(for: AdvantageVisionXRApp.modelEntityReadyNotification)
+                .compactMap { $0.object as? Entity }
+                .receive(on: RunLoop.main)
+                .sink { entity in
+                    updateLegacyModel(entity)
+                }
                 .store(in: &cancellables)
         }
     }
     
+    // MARK: - State Management
+    
+    // For backward compatibility with the old model handling approach
+    @State private var legacyModelEntity: Entity?
+    
     // MARK: - Helper Methods
     
-    /// Resets the model to its original position and scale
-    private func resetModelPosition() {
+    /// Resets the scene to its original position and scale
+    private func resetScene() {
         if let rootEntity = rootEntity {
             // Reset the transformation matrix to identity (default position and rotation)
             rootEntity.transform = .identity
@@ -210,9 +241,9 @@ struct ImmersiveView: View {
         }
     }
     
-    /// Scales the model by a specific factor
+    /// Scales the entire scene by a specific factor
     /// - Parameter factor: The scaling factor to apply (e.g., 0.5 for half size, 2.0 for double)
-    private func scaleModel(factor: Float) {
+    private func scaleScene(factor: Float) {
         if let rootEntity = rootEntity {
             // Update the current scale
             currentScale *= factor
@@ -222,11 +253,36 @@ struct ImmersiveView: View {
         }
     }
     
-    /// Updates the displayed model with a new entity
-    /// - Parameter entity: The RealityKit Entity to display
-    func updateModel(_ entity: Entity) {
-        // Store the new model entity - the update block in RealityView will add it to the scene
-        modelEntity = entity
+    /// Updates the scene with a new set of entities
+    /// - Parameter entities: The array of entities to display
+    private func updateScene(_ entities: [Entity]) {
+        // Store the current entities list
+        currentEntities = entities
+        
+        // Only process if we have a root entity
+        guard let rootEntity = rootEntity else { return }
+        
+        // Remove all existing child entities except for lights and grid
+        for child in rootEntity.children {
+            // Keep grid and lights
+            if child is DirectionalLight || child is PointLight || child.name == "Immersive" {
+                continue
+            }
+            // Remove all other entities
+            child.removeFromParent()
+        }
+        
+        // Add all new entities to the scene
+        for entity in entities {
+            rootEntity.addChild(entity)
+        }
+    }
+    
+    /// Legacy support: Updates the scene with a single model entity (old approach)
+    /// - Parameter entity: The entity to display
+    private func updateLegacyModel(_ entity: Entity) {
+        // Store the new model entity
+        legacyModelEntity = entity
     }
 }
 
@@ -234,4 +290,8 @@ struct ImmersiveView: View {
 #Preview(immersionStyle: .mixed) {
     ImmersiveView()
         .environmentObject(AppModel())
+        .environmentObject(AppCoordinator(
+            appModel: AppModel(),
+            modelLoader: ModelLoader()
+        ))
 }

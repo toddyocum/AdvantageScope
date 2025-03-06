@@ -24,12 +24,15 @@ import RealityKitContent
 /// ## How this integrates with AdvantageScope:
 /// This view serves as the main control panel for the AdvantageVisionXR app,
 /// showing connection status and providing access to the immersive 3D view
-/// where AdvantageScope's 3D models are displayed.
+/// where AdvantageScope's 3D visualizations are displayed.
 struct ContentView: View {
     // MARK: - Properties
     
     /// Access to the shared app model
     @EnvironmentObject private var appModel: AppModel
+    
+    /// Access to the app coordinator for scene management
+    @EnvironmentObject private var appCoordinator: AppCoordinator
     
     /// Reference to the networking manager for connection handling
     @State private var networkingManager: NetworkingManager?
@@ -53,7 +56,9 @@ struct ContentView: View {
         // Initialize networking when view appears
         .onAppear {
             // Create the networking manager with a reference to the app model
-            networkingManager = NetworkingManager(appModel: appModel)
+            if networkingManager == nil {
+                networkingManager = NetworkingManager(appModel: appModel)
+            }
         }
         // React to changes in connection state
         .onChange(of: appModel.connectionState) { oldValue, newValue in
@@ -110,6 +115,21 @@ struct ContentView: View {
             
             Spacer()
             
+            // Connection info and scene statistics
+            VStack(spacing: 12) {
+                // Number of current entities in the scene
+                Text("Scene contains \(appCoordinator.currentEntities.count) entities")
+                    .foregroundStyle(.secondary)
+                
+                // Show asset info if available
+                if let assets = networkingManager?.availableAssets {
+                    Text("Available assets: \(assets.robots?.count ?? 0) robots, \(assets.fields?.count ?? 0) fields")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+            }
+            .padding()
+            
             // 3D preview in the 2D window
             // This shows a placeholder model from the Reality Composer Pro package
             Model3D(named: "Scene", bundle: realityKitContentBundle)
@@ -150,4 +170,8 @@ struct ContentView: View {
 #Preview(windowStyle: .automatic) {
     ContentView()
         .environmentObject(AppModel())
+        .environmentObject(AppCoordinator(
+            appModel: AppModel(),
+            modelLoader: ModelLoader()
+        ))
 }

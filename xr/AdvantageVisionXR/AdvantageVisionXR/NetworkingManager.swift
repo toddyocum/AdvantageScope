@@ -18,19 +18,34 @@ import Combine
 /// ## How it connects to AdvantageScope:
 /// AdvantageScope runs a WebSocket server on port 56328 when its 3D visualization 
 /// is configured for XR viewing. This manager connects to that server and receives
-/// 3D model data in binary format.
+/// MessagePack-encoded data for 3D visualization.
 ///
 /// ## Key features:
 /// - WebSocket connection using URLSessionWebSocketTask
+/// - MessagePack decoding of multiple message types
 /// - Auto-reconnect on connection loss
 /// - Keep-alive with ping messages
 /// - Connection timeout detection
-/// - Binary data handling
+/// - HTTP model downloads
 ///
 /// The @MainActor attribute ensures this class always operates on the main thread
 /// for UI safety since it interacts with SwiftUI's published properties.
 @MainActor
 class NetworkingManager: ObservableObject {
+    // MARK: - Static Properties
+    
+    /// Shared instance for model downloads
+    static var shared: NetworkingManager!
+    
+    /// Notification for settings updates
+    static let settingsReceivedNotification = Notification.Name("SettingsReceived")
+    
+    /// Notification for command updates
+    static let commandReceivedNotification = Notification.Name("CommandReceived")
+    
+    /// Notification for assets updates
+    static let assetsReceivedNotification = Notification.Name("AssetsReceived")
+    
     // MARK: - Private Properties
     
     /// Reference to the shared app model
@@ -51,13 +66,30 @@ class NetworkingManager: ObservableObject {
     /// Timer to detect connection timeouts
     private var receiveTimer: Timer?
     
-    // MARK: - Published Properties
+    /// MessagePack decoder for binary messages
+    private let messageDecoder = MessagePackDecoder()
     
-    /// Most recently received model data
-    @Published private(set) var modelData: Data?
+    // MARK: - Published Properties
     
     /// Whether the connection is currently established
     @Published private(set) var isConnected = false
+    
+    /// Latest settings received from AdvantageScope
+    @Published private(set) var latestSettings: XRSettings?
+    
+    /// Latest command received from AdvantageScope
+    @Published private(set) var latestCommand: ThreeDimensionRendererCommand?
+    
+    /// Available assets information from AdvantageScope
+    @Published private(set) var availableAssets: AdvantageScopeAssets?
+    
+    // MARK: - Computed Properties
+    
+    /// Base URL for the server (used for HTTP model downloads)
+    private var serverBaseURL: URL? {
+        guard !appModel.serverAddress.isEmpty else { return nil }
+        return URL(string: "http://\(appModel.serverAddress):\(appModel.serverPort)")
+    }
     
     // MARK: - Initialization
     
@@ -65,6 +97,17 @@ class NetworkingManager: ObservableObject {
     /// - Parameter appModel: The shared application model
     init(appModel: AppModel) {
         self.appModel = appModel
+        
+        // Setup shared instance if needed
+        if NetworkingManager.shared == nil {
+            NetworkingManager.shared = self
+        }
+    }
+    
+    /// Set up the shared instance
+    /// - Parameter appModel: The app model to use
+    static func setupShared(with appModel: AppModel) {
+        shared = NetworkingManager(appModel: appModel)
     }
     
     // MARK: - Public Methods
@@ -129,6 +172,32 @@ class NetworkingManager: ObservableObject {
         // Update connection state
         isConnected = false
         appModel.connectionState = .disconnected
+    }
+    
+    /// Downloads a 3D model from the server
+    /// - Parameter path: The relative path to the model file
+    /// - Returns: The binary model data
+    func downloadModel(path: String) async throws -> Data {
+        guard let serverBaseURL = serverBaseURL else {
+            throw URLError(.badURL)
+        }
+        
+        // Encode the path to handle special characters
+        let encodedPath = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        let modelURL = serverBaseURL.appendingPathComponent("asset").appending(queryItems: [
+            URLQueryItem(name: "path", value: encodedPath)
+        ])
+        
+        // Download the model data
+        let (data, response) = try await URLSession.shared.data(from: modelURL)
+        
+        // Validate the response
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        
+        return data
     }
     
     // MARK: - Private Methods - Connection Maintenance
@@ -205,8 +274,8 @@ class NetworkingManager: ObservableObject {
             // Process the received message based on its type
             switch message {
             case .data(let data):
-                // Binary messages contain model data
-                handleBinaryMessage(data)
+                // Binary messages are MessagePack encoded
+                await handleBinaryMessage(data)
             case .string(let text):
                 // Text messages might contain commands or metadata
                 handleTextMessage(text)
@@ -233,17 +302,76 @@ class NetworkingManager: ObservableObject {
         print("Received text message: \(text)")
     }
     
-    /// Processes binary messages containing model data
+    /// Processes binary messages with MessagePack decoding
     /// - Parameter data: The received binary data
-    private func handleBinaryMessage(_ data: Data) {
-        // Store the model data for reference
-        self.modelData = data
+    private func handleBinaryMessage(_ data: Data) async {
+        do {
+            // Decode the MessagePack data to determine the message type
+            guard let packet = try messageDecoder.decodePacket(from: data) else {
+                print("Unknown packet format")
+                return
+            }
+            
+            // Process based on packet type
+            switch packet {
+            case let settingsPacket as XRSettingsPacket:
+                handleSettingsPacket(settingsPacket)
+                
+            case let commandPacket as XRCommandPacket:
+                handleCommandPacket(commandPacket)
+                
+            case let assetsPacket as XRAssetsPacket:
+                handleAssetsPacket(assetsPacket)
+                
+            default:
+                print("Unhandled packet type")
+            }
+        } catch {
+            // For now, try the old approach as a fallback (temporary)
+            // This section can be removed once MessagePack decoding is fully implemented
+            print("Error decoding MessagePack: \(error). Trying legacy approach...")
+            
+            // Post the raw data as a model (legacy approach)
+            NotificationCenter.default.post(
+                name: AdvantageVisionXRApp.modelDataReceivedNotification,
+                object: data
+            )
+        }
+    }
+    
+    /// Handles settings packet from AdvantageScope
+    /// - Parameter packet: The settings packet
+    private func handleSettingsPacket(_ packet: XRSettingsPacket) {
+        self.latestSettings = packet.value
         
-        // Notify the app about the received model data via NotificationCenter
-        // This decouples the networking from the 3D model processing pipeline
+        // Notify app about settings update
         NotificationCenter.default.post(
-            name: AdvantageVisionXRApp.modelDataReceivedNotification,
-            object: data
+            name: NetworkingManager.settingsReceivedNotification,
+            object: packet.value
+        )
+    }
+    
+    /// Handles command packet from AdvantageScope
+    /// - Parameter packet: The command packet
+    private func handleCommandPacket(_ packet: XRCommandPacket) {
+        self.latestCommand = packet.value
+        
+        // Notify app about command update
+        NotificationCenter.default.post(
+            name: NetworkingManager.commandReceivedNotification,
+            object: packet.value
+        )
+    }
+    
+    /// Handles assets packet from AdvantageScope
+    /// - Parameter packet: The assets packet
+    private func handleAssetsPacket(_ packet: XRAssetsPacket) {
+        self.availableAssets = packet.value
+        
+        // Notify app about assets update
+        NotificationCenter.default.post(
+            name: NetworkingManager.assetsReceivedNotification,
+            object: packet.value
         )
     }
     
