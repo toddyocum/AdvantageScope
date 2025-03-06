@@ -306,7 +306,7 @@ class NetworkingManager: ObservableObject {
     /// - Parameter data: The received binary data
     private func handleBinaryMessage(_ data: Data) async {
         do {
-            // Decode the MessagePack data to determine the message type
+            // Try to decode the MessagePack data to determine the message type
             guard let packet = try messageDecoder.decodePacket(from: data) else {
                 print("Unknown packet format")
                 return
@@ -315,28 +315,71 @@ class NetworkingManager: ObservableObject {
             // Process based on packet type
             switch packet {
             case let settingsPacket as XRSettingsPacket:
+                print("Received settings packet")
                 handleSettingsPacket(settingsPacket)
                 
             case let commandPacket as XRCommandPacket:
+                print("Received command packet with \(commandPacket.value.objects.count) objects")
                 handleCommandPacket(commandPacket)
                 
             case let assetsPacket as XRAssetsPacket:
+                print("Received assets packet")
                 handleAssetsPacket(assetsPacket)
                 
             default:
                 print("Unhandled packet type")
             }
-        } catch {
-            // For now, try the old approach as a fallback (temporary)
-            // This section can be removed once MessagePack decoding is fully implemented
-            print("Error decoding MessagePack: \(error). Trying legacy approach...")
+        } catch let error as MessagePackError {
+            // Handle MessagePack specific errors
+            print("MessagePack error: \(error)")
             
-            // Post the raw data as a model (legacy approach)
-            NotificationCenter.default.post(
-                name: AdvantageVisionXRApp.modelDataReceivedNotification,
-                object: data
-            )
+            // Try JSON fallback if MessagePack fails
+            do {
+                if let packet = try messageDecoder.attemptJSONFallback(from: data) {
+                    print("JSON fallback successful")
+                    
+                    // Process based on packet type
+                    switch packet {
+                    case let settingsPacket as XRSettingsPacket:
+                        handleSettingsPacket(settingsPacket)
+                    case let commandPacket as XRCommandPacket:
+                        handleCommandPacket(commandPacket)
+                    case let assetsPacket as XRAssetsPacket:
+                        handleAssetsPacket(assetsPacket)
+                    default:
+                        break
+                    }
+                } else {
+                    // If that fails too, try legacy approach
+                    legacyHandleBinaryData(data)
+                }
+            } catch {
+                // If JSON fallback also fails, fall back to legacy approach
+                legacyHandleBinaryData(data)
+            }
+        } catch {
+            // Handle other errors and try the legacy approach as a last resort
+            print("Error handling binary message: \(error)")
+            legacyHandleBinaryData(data)
         }
+    }
+    
+    /// Legacy fallback for binary data handling
+    /// - Parameter data: The raw binary data
+    private func legacyHandleBinaryData(_ data: Data) {
+        print("Using legacy approach for binary data")
+        
+        // First few bytes might help identify the format
+        if data.count > 10 {
+            let prefix = data.prefix(8)
+            print("Data prefix: \(prefix.map { String(format: "%02X", $0) }.joined(separator: " "))")
+        }
+        
+        // Post the raw data as a model (legacy approach)
+        NotificationCenter.default.post(
+            name: AdvantageVisionXRApp.modelDataReceivedNotification,
+            object: data
+        )
     }
     
     /// Handles settings packet from AdvantageScope
