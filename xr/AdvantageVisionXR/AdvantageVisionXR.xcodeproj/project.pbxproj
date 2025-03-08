@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		5FBA3D722D77C787006CD69C /* RealityKitContent in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBA3D712D77C787006CD69C /* RealityKitContent */; };
+		5FBA3DA52D793572006CD69C /* DMMessagePack in Frameworks */ = {isa = PBXBuildFile; productRef = 5FBA3DA42D793572006CD69C /* DMMessagePack */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5FBA3DA52D793572006CD69C /* DMMessagePack in Frameworks */,
 				5FBA3D722D77C787006CD69C /* RealityKitContent in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -77,6 +79,7 @@
 				5FBA3D6E2D77C787006CD69C /* AdvantageVisionXR */,
 				5FBA3D6F2D77C787006CD69C /* Packages */,
 				5FBA3D8A2D77C788006CD69C /* AdvantageVisionXRTests */,
+				5FBA3DA32D793572006CD69C /* Frameworks */,
 				5FBA3D6D2D77C787006CD69C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -96,6 +99,13 @@
 				5FBA3D702D77C787006CD69C /* RealityKitContent */,
 			);
 			path = Packages;
+			sourceTree = "<group>";
+		};
+		5FBA3DA32D793572006CD69C /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -119,6 +129,7 @@
 			name = AdvantageVisionXR;
 			packageProductDependencies = (
 				5FBA3D712D77C787006CD69C /* RealityKitContent */,
+				5FBA3DA42D793572006CD69C /* DMMessagePack */,
 			);
 			productName = AdvantageVisionXR;
 			productReference = 5FBA3D6C2D77C787006CD69C /* AdvantageVisionXR.app */;
@@ -175,6 +186,9 @@
 			);
 			mainGroup = 5FBA3D632D77C787006CD69C;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5FBA3DA22D792FEB006CD69C /* XCRemoteSwiftPackageReference "msgpack-swift" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5FBA3D6D2D77C787006CD69C /* Products */;
 			projectDirPath = "";
@@ -472,10 +486,26 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		5FBA3DA22D792FEB006CD69C /* XCRemoteSwiftPackageReference "msgpack-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/fumoboy007/msgpack-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.6;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		5FBA3D712D77C787006CD69C /* RealityKitContent */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = RealityKitContent;
+		};
+		5FBA3DA42D793572006CD69C /* DMMessagePack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5FBA3DA22D792FEB006CD69C /* XCRemoteSwiftPackageReference "msgpack-swift" */;
+			productName = DMMessagePack;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
